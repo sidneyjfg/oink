@@ -602,7 +602,7 @@ mod platform {
     pub(crate) struct Backend;
 
     impl Backend {
-        pub(crate) fn new() -> Option<Self> {
+        pub(crate) fn new(_: Arc<crate::diagnostics::Health>) -> Option<Self> {
             None
         }
         pub(crate) fn set_displays(&mut self, _: &[DisplayInfo]) {}

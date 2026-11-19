@@ -856,6 +856,22 @@ fn system_language() -> String {
         .firstObject()
         .map_or_else(String::new, |s| s.to_string())
 }
+#[cfg(not(any(target_os = "macos", windows)))]
+fn system_language() -> String {
+    // POSIX locale precedence: LC_ALL, LC_MESSAGES, LANG (e.g. "pt_BR.UTF-8" -> "pt-BR").
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|value| !value.is_empty() && value != "C" && value != "POSIX")
+        .map(|value| {
+            value
+                .split(['.', '@'])
+                .next()
+                .unwrap_or_default()
+                .replace('_', "-")
+        })
+        .unwrap_or_default()
+}
 #[cfg(windows)]
 fn system_language() -> String {
     use windows::{

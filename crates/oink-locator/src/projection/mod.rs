@@ -19,6 +19,28 @@ mod platform;
 #[path = "windows.rs"]
 mod platform;
 
+/// Linux/other: no native projection window yet; `Backend::new` reports unavailable.
+#[cfg(not(any(target_os = "macos", windows)))]
+mod platform {
+    use super::*;
+    use crate::diagnostics::Health;
+
+    pub(super) struct Backend;
+
+    impl Backend {
+        pub(super) fn new(_: Arc<Health>) -> Option<Self> {
+            None
+        }
+        pub(super) fn present(&mut self, _: Vec<Frame>) {}
+        pub(super) fn hide(&mut self) {}
+        pub(super) fn pump(&mut self) {}
+    }
+
+    pub(super) fn annotation_unit(_screen: Rect) -> f64 {
+        1.0
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn diagnose(health: &crate::diagnostics::Health, mtm: objc2::MainThreadMarker) {
     platform::diagnose(health, mtm);

@@ -25,6 +25,34 @@ pub fn scale_for(_display: &DisplayInfo) -> f64 {
 pub fn scale_for(display: &DisplayInfo) -> f64 {
     platform::scale_for(display)
 }
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn scale_for(_display: &DisplayInfo) -> f64 {
+    1.0
+}
+
+/// Linux/other: no native toast surface yet; `Backend::new` reports unavailable.
+#[cfg(not(any(target_os = "macos", windows)))]
+mod platform {
+    use super::*;
+
+    pub(super) struct Backend;
+
+    impl Backend {
+        pub(super) fn new() -> Option<Self> {
+            None
+        }
+    }
+
+    impl Surface for Backend {
+        fn present(&mut self, _frames: Vec<Frame>) {}
+        fn clicks(&mut self) -> Vec<Click> {
+            Vec::new()
+        }
+        fn reduced_motion(&self) -> bool {
+            false
+        }
+    }
+}
 
 pub const LIFETIME: Duration = Duration::from_secs(6);
 pub const GAP: f64 = 10.0;
