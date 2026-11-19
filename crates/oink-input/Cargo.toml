@@ -15,6 +15,10 @@ tracing.workspace = true
 serde.workspace = true
 crossbeam-queue = "0.3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Pure-Rust X11 client (MIT OR Apache-2.0). XTEST injects input; more features come with capture.
+x11rb = { version = "0.13", default-features = false, features = ["xtest"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2-core-foundation = "0.3"

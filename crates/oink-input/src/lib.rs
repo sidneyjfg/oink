@@ -35,6 +35,8 @@ pub mod diagnostics;
 pub mod display_power;
 pub mod gesture_trace;
 pub mod jitter;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 pub mod native_lifecycle;
@@ -442,6 +444,8 @@ pub fn platform_backend() -> Result<Box<dyn InputBackend>, InputError> {
     return macos::backend();
     #[cfg(windows)]
     return windows::backend();
+    #[cfg(target_os = "linux")]
+    return linux::backend();
     #[allow(unreachable_code)]
     Err(InputError::Unsupported)
 }
