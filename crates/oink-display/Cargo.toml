@@ -14,6 +14,10 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Pure-Rust X11 client (MIT OR Apache-2.0); RandR enumerates monitors and reports changes.
+x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-core-foundation = "0.3"

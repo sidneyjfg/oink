@@ -9,6 +9,8 @@
 //! Wheel sign follows the Windows backend: `dy > 0` scrolls the view up
 //! (X11 button 4), `dx > 0` scrolls it left (button 6).
 
+mod capture;
+
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
@@ -40,6 +42,8 @@ struct LinuxInput {
     acc: Mutex<Accumulators>,
     /// X11 keycodes currently held by injection, released if the backend goes away.
     held_keys: Mutex<BTreeSet<u8>>,
+    /// The router loop; this device only receives input, so it never captures any.
+    input_loop: Mutex<Option<capture::ReceiveLoop>>,
 }
 
 #[derive(Default)]
@@ -68,7 +72,17 @@ impl LinuxInput {
             root,
             acc: Mutex::new(Accumulators::default()),
             held_keys: Mutex::new(BTreeSet::new()),
+            input_loop: Mutex::new(None),
         })
+    }
+
+    /// Takes the loop out of the lock first, then waits for it: an owner callback that
+    /// reaches `stop` must not deadlock on the mutex.
+    fn stop_loop(&self) {
+        let handle = self.input_loop.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(handle) = handle {
+            handle.stop();
+        }
     }
 
     fn key(&self, code: KeyCode, pressed: bool) -> Result<(), InputError> {
@@ -132,11 +146,25 @@ impl LinuxInput {
 
 impl InputBackend for LinuxInput {
     fn start(&self, _handler: EventHandler) -> Result<(), InputError> {
-        // Step 4: XInput2 raw-event capture.
+        // Local capture (XInput2) is intentionally not implemented: this device only
+        // receives input from other computers.
         Err(InputError::Unsupported)
     }
 
-    fn stop(&self) {}
+    fn start_loop(&self, owner: Box<dyn crate::capture_loop::CaptureLoop>) -> Result<(), InputError> {
+        self.stop_loop();
+        let handle = capture::ReceiveLoop::spawn(owner)?;
+        *self.input_loop.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        Ok(())
+    }
+
+    fn capture_active(&self) -> Option<bool> {
+        Some(false)
+    }
+
+    fn stop(&self) {
+        self.stop_loop();
+    }
 
     fn set_mode(&self, mode: CaptureMode) -> Result<(), InputError> {
         match mode {
@@ -216,6 +244,7 @@ impl InputBackend for LinuxInput {
 
 impl Drop for LinuxInput {
     fn drop(&mut self) {
+        self.stop_loop();
         // Never leave an injected key stuck down on the user's desktop.
         let held = std::mem::take(&mut *self.held_keys.lock().unwrap_or_else(|e| e.into_inner()));
         for keycode in held {

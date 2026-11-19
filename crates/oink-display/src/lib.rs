@@ -14,6 +14,8 @@ pub use oink_foundation::display::DisplayInfo;
 pub mod arrangement;
 
 pub mod layout;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 pub mod projection;
@@ -107,6 +109,8 @@ pub fn platform_backend() -> Result<Box<dyn DisplayBackend>, DisplayError> {
     return macos::backend();
     #[cfg(windows)]
     return windows::backend();
+    #[cfg(target_os = "linux")]
+    return linux::backend();
     #[allow(unreachable_code)]
     Err(DisplayError::Unsupported)
 }
