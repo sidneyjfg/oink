@@ -80,11 +80,14 @@ pub use windows::service as windows_service;
 pub mod mac_keymap;
 #[path = "windows/keymap.rs"]
 mod win_keymap;
+#[path = "linux/keymap.rs"]
+mod linux_keymap;
 
 pub fn native_key_supported(os: &str, code: KeyCode) -> bool {
     match os {
         "macos" => mac_keymap::hid_to_mac(code).is_some() || mac_keymap::hid_to_nx(code).is_some(),
         "windows" => win_keymap::lookup_hid(code).is_some(),
+        "linux" => linux_keymap::hid_to_evdev(code).is_some(),
         _ => false,
     }
 }

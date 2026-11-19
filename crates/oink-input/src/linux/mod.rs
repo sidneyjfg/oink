@@ -1,27 +1,30 @@
 //! Linux (X11) input backend.
 //!
-//! Step 1-2 of the port: connect to the X server, query the pointer and inject
-//! pointer motion, buttons and wheel through the XTEST extension. Keyboard
-//! injection, global capture (`start`) and `CaptureMode::Remote` are not
-//! implemented yet and report `InputError::Unsupported` instead of pretending.
+//! Connects to the X server, queries the pointer and injects pointer motion, buttons,
+//! wheel and keys through the XTEST extension. Keys are injected as physical X11
+//! keycodes (see `linux/keymap.rs`), so the server applies the active layout.
+//! Global capture (`start`) and `CaptureMode::Remote` are not implemented yet and
+//! report `InputError::Unsupported` instead of pretending.
 //!
 //! Wheel sign follows the Windows backend: `dy > 0` scrolls the view up
 //! (X11 button 4), `dx > 0` scrolls it left (button 6).
 
+use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use oink_foundation::Point;
 use oink_foundation::input::{
-    CaptureMode, FeelProfile, InjectEvent, InputPermissions, MouseButton, PermissionState, ScrollUnit,
+    CaptureMode, FeelProfile, InjectEvent, InputPermissions, KeyCode, MouseButton, PermissionState, ScrollUnit,
 };
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    self, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, MOTION_NOTIFY_EVENT,
+    self, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
+    MOTION_NOTIFY_EVENT,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-use crate::{EventHandler, InputBackend, InputError};
+use crate::{EventHandler, InputBackend, InputError, linux_keymap, win_actions};
 
 /// Pixel scroll deltas are converted to wheel notches with this many pixels per notch.
 const PIXELS_PER_NOTCH: f64 = 40.0;
@@ -35,6 +38,8 @@ struct LinuxInput {
     root: xproto::Window,
     /// Sub-unit remainders carried between events (wheel notches, relative pixels).
     acc: Mutex<Accumulators>,
+    /// X11 keycodes currently held by injection, released if the backend goes away.
+    held_keys: Mutex<BTreeSet<u8>>,
 }
 
 #[derive(Default)]
@@ -62,7 +67,28 @@ impl LinuxInput {
             conn,
             root,
             acc: Mutex::new(Accumulators::default()),
+            held_keys: Mutex::new(BTreeSet::new()),
         })
+    }
+
+    fn key(&self, code: KeyCode, pressed: bool) -> Result<(), InputError> {
+        if win_actions::key_dropped(code) {
+            // Same policy as the other backends: keys that exist only on macOS are dropped.
+            tracing::debug!("mac-only key: dropped");
+            return Ok(());
+        }
+        let keycode = linux_keymap::hid_to_x11(code).ok_or(InputError::Unsupported)?;
+        {
+            let mut held = self.held_keys.lock().unwrap_or_else(|e| e.into_inner());
+            if pressed {
+                held.insert(keycode);
+            } else {
+                held.remove(&keycode);
+            }
+        }
+        let kind = if pressed { KEY_PRESS_EVENT } else { KEY_RELEASE_EVENT };
+        self.fake(kind, keycode, x11rb::NONE, 0, 0)?;
+        self.flush()
     }
 
     fn fake(&self, kind: u8, detail: u8, root: xproto::Window, x: i16, y: i16) -> Result<(), InputError> {
@@ -148,9 +174,16 @@ impl InputBackend for LinuxInput {
             // The wheel fields are the fallback delivery the sender prepared for platforms
             // without precision touchpad scrolling.
             InjectEvent::TouchpadScroll { wheel, .. } => self.scroll(wheel.dx, wheel.dy, wheel.unit),
-            // Step 3.
-            InjectEvent::Key { .. } | InjectEvent::KeyWithoutLock { .. } | InjectEvent::Volume { .. } => {
-                Err(InputError::Unsupported)
+            // `KeyWithoutLock` only matters on Windows (Win+L compensation).
+            InjectEvent::Key { code, pressed } | InjectEvent::KeyWithoutLock { code, pressed } => {
+                self.key(*code, *pressed)
+            }
+            // The extra modifier bits exist for macOS Fn+volume combinations; not replayed here.
+            InjectEvent::Volume { code, pressed, .. } => {
+                if !code.is_volume() {
+                    return Err(InputError::Unsupported);
+                }
+                self.key(*code, *pressed)
             }
             // Platform cannot replay these; the other backends also drop them.
             InjectEvent::Gesture(_) | InjectEvent::TouchpadContacts(_) => Ok(()),
@@ -177,6 +210,22 @@ impl InputBackend for LinuxInput {
             accessibility: PermissionState::NotApplicable,
             input_monitoring: PermissionState::NotApplicable,
             secure_input_active: false,
+        }
+    }
+}
+
+impl Drop for LinuxInput {
+    fn drop(&mut self) {
+        // Never leave an injected key stuck down on the user's desktop.
+        let held = std::mem::take(&mut *self.held_keys.lock().unwrap_or_else(|e| e.into_inner()));
+        for keycode in held {
+            let _ = self.fake(KEY_RELEASE_EVENT, keycode, x11rb::NONE, 0, 0);
+        }
+        let _ = self.flush();
+        // A request/reply round trip guarantees the server processed the releases before the
+        // connection closes; closing right after `flush` can race the pending requests.
+        if let Ok(cookie) = self.conn.get_input_focus() {
+            let _ = cookie.reply();
         }
     }
 }
