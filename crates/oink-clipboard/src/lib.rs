@@ -119,6 +119,8 @@ pub type FileReader = Box<dyn std::io::Read + Send>;
 pub mod copy_diagnostics;
 pub mod dnd;
 pub mod formats;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -362,6 +364,8 @@ pub fn platform_backend() -> Result<Box<dyn ClipboardBackend>, ClipboardError> {
     return macos::backend();
     #[cfg(windows)]
     return windows::backend();
+    #[cfg(target_os = "linux")]
+    return linux::backend();
     #[allow(unreachable_code)]
     Err(ClipboardError::Unsupported)
 }

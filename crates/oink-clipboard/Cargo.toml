@@ -44,6 +44,9 @@ objc2-core-services = { version = "0.3", default-features = false, features = ["
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSImageRep", "NSStringDrawing", "NSAttributedString", "NSBitmapImageRep", "block2", "NSApplication", "NSResponder", "NSView", "NSWindow", "NSPanel", "NSColor", "NSGraphics", "NSScreen", "NSEvent", "NSImage", "NSWorkspace", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSFilePromiseProvider", "NSFilePromiseReceiver", "NSRunningApplication", "objc2-core-foundation", "objc2-core-graphics"] }
 
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["xfixes"] }
+
 [target.'cfg(windows)'.dependencies]
 # Shell's native .url serializer writes a bounded temporary file.
 tempfile = "3"
