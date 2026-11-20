@@ -41,77 +41,181 @@ mostrado em uma tela e digitado na outra. Depois disso se reconhecem sozinhos.
 - O protocolo é o mesmo do original (versão 0.3.7), por isso o app oficial conversa com o receptor
   Linux sem nenhuma alteração.
 
+## Comece por aqui
+
+Escolha o que você quer fazer. Cada linha leva ao passo a passo:
+
+| Eu quero... | Vá para |
+|---|---|
+| Instalar no **Windows** | [Instalar no Windows](#instalar-no-windows) |
+| Instalar no **macOS** | [Instalar no macOS](#instalar-no-macos) |
+| Instalar no **Linux** | [Instalar no Linux](#instalar-no-linux) |
+| Entender como parear e trocar o controle | [Conceitos: parear e controlar](#conceitos-parear-e-controlar) |
+| Controlar um Mac a partir do Windows | [Windows controla macOS](#windows-controla-macos) |
+| Controlar um Windows a partir do Mac | [macOS controla Windows](#macos-controla-windows) |
+| Controlar um Linux a partir do Windows | [Windows controla Linux](#windows-controla-linux) |
+| Controlar um Linux a partir do Mac | [macOS controla Linux](#macos-controla-linux) |
+| Controlar um Windows ou Mac a partir do Linux | [Linux controla Windows ou macOS](#linux-controla-windows-ou-macos-não-suportado) |
+
+### Quem pode controlar quem
+
+Linhas são o computador **controlador** (cujo teclado e mouse você usa); colunas, o **controlado**.
+
+| Controlador ↓ / Controlado → | Windows | macOS | Linux |
+|---|---|---|---|
+| **Windows** | sim | sim | **sim** (este fork) |
+| **macOS** | sim | sim | **sim** (este fork, não testado) |
+| **Linux** | **não** | **não** | não |
+
+Linux só **recebe**: este fork não captura o teclado e o mouse do Linux.
+
 ## Download
 
-Baixe só o arquivo do seu sistema na [página de Releases](https://github.com/sidneyjfg/oink/releases/latest),
+Todos os arquivos ficam na [página de Releases](https://github.com/sidneyjfg/oink/releases/latest),
 sem clonar nada:
 
 | Sistema | Arquivo |
 |---|---|
 | Linux x86_64 (receptor) | `oink-agent-linux-x86_64.tar.gz` |
 | Windows 10/11 x64 | `Oink-0.3.7-windows-x64.msi` |
-| macOS Apple silicon | `Oink-0.3.7-macos-arm64.dmg` |
+| macOS Apple silicon (M1 e mais novos) | `Oink-0.3.7-macos-arm64.dmg` |
 | macOS Intel | `Oink-0.3.7-macos-x64.dmg` |
 
 `SHA256SUMS` traz os hashes. Os arquivos de Windows e macOS são os instaladores **oficiais** do
 Oink 0.3.7, sem alteração (conferidos contra o hash do projeto original ao montar a Release): o fork
 só muda o Linux.
 
-## Instalação e uso
+## Instalar no Windows
 
-### 1. Linux (o computador controlado)
+Requisito: Windows 10 (1809 ou mais novo) ou 11, x64.
+
+**Opção A, pelo navegador:** baixe o [`Oink-0.3.7-windows-x64.msi`](https://github.com/sidneyjfg/oink/releases/latest)
+e dê dois cliques.
+
+**Opção B, por script** (baixa, confere o SHA-256 e instala), sem clonar o repositório:
+
+```powershell
+irm https://raw.githubusercontent.com/sidneyjfg/oink/linux-port/installers/windows/install.ps1 | iex
+```
+
+> O instalador não é assinado. Se o **Controle de Aplicativos Inteligente** (Smart App Control)
+> estiver ligado, o Windows bloqueia a instalação ("a DLL necessária não pôde ser executada"). Só dá
+> para desligá-lo e, em geral, sem volta: a decisão é sua, o script apenas avisa. Se aparecer o
+> SmartScreen, use *Mais informações → Executar assim mesmo*.
+
+## Instalar no macOS
+
+Requisito: macOS 14.2 ou mais novo.
+
+1. Baixe na [Release](https://github.com/sidneyjfg/oink/releases/latest) o
+   `Oink-0.3.7-macos-arm64.dmg` (Mac com chip Apple) ou o `Oink-0.3.7-macos-x64.dmg` (Mac Intel).
+2. Abra o `.dmg` e arraste o Oink para *Aplicativos*.
+3. Abra o Oink. Ele pede permissões do sistema (**Acessibilidade**, **Monitoramento de Entrada** e
+   rede local); conceda em *Ajustes do Sistema → Privacidade e Segurança*. Sem elas o Mac não
+   consegue capturar nem receber teclado e mouse.
+4. Se o macOS bloquear a abertura, vá em *Ajustes do Sistema → Privacidade e Segurança* e use
+   *Abrir mesmo assim*.
+
+## Instalar no Linux
 
 Requisitos: Debian/Ubuntu ou derivado, 64 bits (x86_64), sessão **Xorg** (na tela de login escolha
-"Ubuntu/GNOME on Xorg" ou equivalente), `systemd`, `python3`, `libasound2` e `libssl3`.
+"... on Xorg"; Wayland não funciona), `systemd`, `python3`, `libasound2` e `libssl3`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sidneyjfg/oink/linux-port/installers/linux/install.sh | bash
 ```
 
-O script baixa o binário da [Release](https://github.com/sidneyjfg/oink/releases) deste repositório,
-confere o SHA-256 e instala em `~/.local/bin` **sem root e sem Rust**. Ele cria o serviço
-`oink-agent` do systemd de usuário, que sobe no login e acha sozinho o `DISPLAY`.
+O script baixa o binário da [Release](https://github.com/sidneyjfg/oink/releases/latest), confere o
+SHA-256 e instala em `~/.local/bin`, **sem root e sem Rust**. Ele cria o serviço `oink-agent` do
+systemd de usuário, que sobe no login e acha sozinho o `DISPLAY`.
 
 ```sh
-systemctl --user status oink-agent      # ver se está rodando
-journalctl --user -u oink-agent -f      # logs
-~/.local/bin/oink-agent status          # estado do agente
-./installers/linux/install.sh --uninstall   # remover (mantém o pareamento)
+systemctl --user status oink-agent        # está rodando?
+journalctl --user -u oink-agent -f        # logs
+~/.local/bin/oink-agent status            # estado do agente
+./installers/linux/install.sh --uninstall # remover (mantém o pareamento)
 ```
 
-Sem Release disponível, use um binário que você compilou: `./install.sh --binary caminho/oink-agent`.
+Sem Release, use um binário que você compilou: `./install.sh --binary caminho/oink-agent`
+(veja [Compilar](#compilar-do-código-fonte)). O Linux não tem janela: tudo é por linha de comando.
 
-### 2. Windows (o computador que controla)
+## Conceitos: parear e controlar
 
-Execute em um PowerShell:
+O Oink é **peer-to-peer**: não existe "servidor" nem "cliente" fixos. Os computadores se descobrem
+na rede local (todos na mesma rede) e **se pareiam uma única vez**. "Controlador" é simplesmente o
+computador em cujo teclado e mouse você está mexendo; "controlado" é o que recebe.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File installers\windows\install.ps1
-```
+**Parear (uma vez por par de computadores):**
 
-O script baixa o **instalador oficial** (MSI) do projeto original, confere o SHA-256 e instala. Não há
-versão própria para Windows porque o código dele não foi alterado.
+1. Abra o Oink nos dois. Na janela, a lista **Dispositivos próximos** mostra o outro computador.
+2. Em um deles, clique no outro. Uma tela mostra um **código de 6 dígitos**.
+3. No outro computador, aceite o pedido e digite o código (no Linux, use `oink-pair`, descrito abaixo).
+4. Pronto: o pareamento fica salvo.
 
-> O MSI oficial não é assinado. Se o **Controle de Aplicativos Inteligente** (Smart App Control) estiver
-> ligado, o Windows bloqueia a instalação ("a DLL necessária não pôde ser executada"). Só dá para
-> desligá-lo e, em geral, sem volta; é uma decisão sua, o script apenas avisa. Em outros casos, o
-> SmartScreen pede *Mais informações → Executar assim mesmo*.
+**Controlar:** na tela de organização das telas (*Display arrangement*) arraste o ícone do outro
+computador para o lado do seu, como se fosse um segundo monitor. Depois, empurre o mouse contra essa
+borda: o cursor passa para o outro computador e o teclado vai junto. Também existe um atalho para
+alternar a posição do ponteiro entre os computadores. (Os nomes exatos dos menus podem variar um pouco
+entre versões.)
 
-### 3. macOS (o computador que controla)
+**Socorro:** se algo travar ou você perder o cursor, **segure `Esc` por 5 segundos** no computador
+controlador para pausar o compartilhamento.
 
-Instale o aplicativo oficial pelas [Releases do Oink](https://github.com/oinkvm/oink/releases)
-(macOS 14.2 ou mais novo). Não precisa de nada deste fork: ele se comporta como o Windows.
+**Área de transferência:** o texto copiado em um computador pode ser colado no outro, nos dois
+sentidos. Com Linux no meio, só texto simples (veja [Limitações](#limitações-conhecidas)).
 
-### 4. Parear e usar
+## Windows controla macOS
 
-1. Abra o Oink no PC (Windows/macOS). O notebook aparece em **Dispositivos próximos**; clique nele.
-2. O PC mostra um **código de 6 dígitos**.
-3. No notebook, rode: `oink-pair 123456` (com o código que apareceu).
-4. Pronto. Mova o mouse para a borda da tela do PC configurada para o notebook e o controle passa para
-   ele; teclado, rolagem e cliques seguem junto. O que você copiar (texto) em um lado pode ser colado
-   no outro.
+*Controlador: Windows. Controlado: Mac. Os dois usam o app oficial.*
 
-Se `oink-pair` não for encontrado, o `~/.local/bin` não está no `PATH`: use o caminho completo.
+1. [Instale no Windows](#instalar-no-windows) e [no macOS](#instalar-no-macos), na mesma rede.
+2. Conceda as permissões no Mac (passo 3 da instalação).
+3. No Windows, abra o Oink, clique no Mac em *Dispositivos próximos* e anote o código de 6 dígitos.
+   No Mac, aceite o pedido e digite o código.
+4. No Windows, em *organização das telas*, coloque o Mac ao lado e empurre o mouse na borda.
+
+## macOS controla Windows
+
+*Controlador: Mac. Controlado: Windows. Os dois usam o app oficial.*
+
+1. [Instale no macOS](#instalar-no-macos) e [no Windows](#instalar-no-windows), na mesma rede.
+2. No Mac, conceda as permissões pedidas.
+3. No Mac, abra o Oink e clique no Windows em *Dispositivos próximos*; digite o código mostrado na
+   tela do Windows. (Quem inicia o pareamento tanto faz: o pareamento vale para os dois sentidos.)
+4. No Mac, em *organização das telas*, coloque o Windows ao lado e empurre o mouse na borda.
+
+## Windows controla Linux
+
+*Controlador: Windows (app oficial). Controlado: Linux (este fork). É o caso testado e confirmado.*
+
+1. [Instale no Linux](#instalar-no-linux) e [no Windows](#instalar-no-windows), na mesma rede, e
+   mantenha a sessão gráfica do Linux aberta (logado em Xorg).
+2. No Windows, abra o Oink e clique no notebook em *Dispositivos próximos*. O Windows mostra o código
+   de 6 dígitos.
+3. No Linux, rode: `oink-pair 123456` (com o código da tela do Windows).
+4. No Windows, em *organização das telas*, coloque o notebook ao lado e empurre o mouse na borda.
+   Teclado, rolagem, cliques e texto copiado passam para o Linux.
+
+Se `oink-pair` não for encontrado, o `~/.local/bin` não está no `PATH`; use o caminho completo.
+
+## macOS controla Linux
+
+*Controlador: Mac (app oficial). Controlado: Linux (este fork).
+O protocolo é o mesmo do Windows, mas **este caso ainda não foi testado**.*
+
+1. [Instale no Linux](#instalar-no-linux) e [no macOS](#instalar-no-macos), na mesma rede, com as
+   permissões do Mac concedidas.
+2. No Mac, clique no notebook em *Dispositivos próximos* e anote o código de 6 dígitos.
+3. No Linux, rode `oink-pair <código>`.
+4. No Mac, em *organização das telas*, coloque o notebook ao lado e empurre o mouse na borda.
+
+## Linux controla Windows ou macOS (não suportado)
+
+Este fork **não captura** o teclado e o mouse do Linux, então ele não consegue controlar outro
+computador (nem Windows, nem macOS). Para isso seria preciso implementar a captura de entrada via
+XInput2 e o modo "grab" no `oink-agent`, o que não foi feito. Enquanto isso, o Linux só pode ser o
+**controlado**: use o teclado e o mouse do Windows ou do Mac para controlá-lo
+([Windows controla Linux](#windows-controla-linux), [macOS controla Linux](#macos-controla-linux)).
 
 ## Limitações conhecidas
 
