@@ -20,7 +20,7 @@
 param(
     [string]$Version = 'latest',
     [string]$MsiPath,
-    [string]$Repo = 'oinkvm/oink',
+    [string]$Repo = 'sidneyjfg/oink',
     [switch]$AllowUnverified
 )
 $ErrorActionPreference = 'Stop'

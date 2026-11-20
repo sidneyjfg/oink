@@ -43,11 +43,25 @@ jobs:
           tar -C out -czf oink-agent-linux-x86_64.tar.gz oink-agent
           sha256sum oink-agent-linux-x86_64.tar.gz > oink-agent-linux-x86_64.tar.gz.sha256
           ls -lh oink-agent-linux-x86_64.tar.gz
+      - name: Baixar instaladores oficiais (Windows e macOS)
+        # Este fork não altera o código de Windows/macOS: reaproveita os binários oficiais
+        # (mesmo protocolo) conferindo o SHA-256 publicado pelo projeto original.
+        env:
+          UP: https://github.com/oinkvm/oink/releases/download/v0.3.7
+        run: |
+          mkdir up && cd up
+          for f in Oink-0.3.7-windows-x64.msi Oink-0.3.7-macos-arm64.dmg Oink-0.3.7-macos-x64.dmg; do
+            curl -fsSL -O "$UP/$f"
+          done
+          curl -fsSL -O "$UP/SHA256SUMS"
+          grep -E 'windows-x64\.msi|macos-(arm64|x64)\.dmg' SHA256SUMS | sha256sum -c -
+          cd .. && mv up/*.msi up/*.dmg .
+          sha256sum *.msi *.dmg oink-agent-linux-x86_64.tar.gz > SHA256SUMS
       - name: Publicar a Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
-            --notes "Receptor Linux (X11) do fork. Instale com installers/linux/install.sh." \
-            oink-agent-linux-x86_64.tar.gz oink-agent-linux-x86_64.tar.gz.sha256
+            --notes "Linux: oink-agent-linux-x86_64.tar.gz (receptor do fork). Windows e macOS: instaladores oficiais do Oink 0.3.7, sem alteração. Veja o README." \
+            oink-agent-linux-x86_64.tar.gz oink-agent-linux-x86_64.tar.gz.sha256             Oink-0.3.7-windows-x64.msi Oink-0.3.7-macos-arm64.dmg Oink-0.3.7-macos-x64.dmg SHA256SUMS

@@ -41,6 +41,22 @@ mostrado em uma tela e digitado na outra. Depois disso se reconhecem sozinhos.
 - O protocolo é o mesmo do original (versão 0.3.7), por isso o app oficial conversa com o receptor
   Linux sem nenhuma alteração.
 
+## Download
+
+Baixe só o arquivo do seu sistema na [página de Releases](https://github.com/sidneyjfg/oink/releases/latest),
+sem clonar nada:
+
+| Sistema | Arquivo |
+|---|---|
+| Linux x86_64 (receptor) | `oink-agent-linux-x86_64.tar.gz` |
+| Windows 10/11 x64 | `Oink-0.3.7-windows-x64.msi` |
+| macOS Apple silicon | `Oink-0.3.7-macos-arm64.dmg` |
+| macOS Intel | `Oink-0.3.7-macos-x64.dmg` |
+
+`SHA256SUMS` traz os hashes. Os arquivos de Windows e macOS são os instaladores **oficiais** do
+Oink 0.3.7, sem alteração (conferidos contra o hash do projeto original ao montar a Release): o fork
+só muda o Linux.
+
 ## Instalação e uso
 
 ### 1. Linux (o computador controlado)
