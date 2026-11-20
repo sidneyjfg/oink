@@ -1,12 +1,15 @@
 name: Linux release
 # Gera o binário Linux (receptor X11) e publica numa Release deste repositório.
-# Rode manualmente (Actions > Linux release > Run workflow) informando a tag, por exemplo v0.3.7-linux1.
+# Roda ao publicar uma tag v*-linux* (git tag v0.3.7-linux1 && git push meu v0.3.7-linux1)
+# ou manualmente em Actions > Linux release > Run workflow.
 on:
+  push:
+    tags: ['v*-linux*']
   workflow_dispatch:
     inputs:
       tag:
         description: Tag da Release a criar (ex.: v0.3.7-linux1)
-        required: true
+        required: false
         type: string
 permissions:
   contents: write
@@ -43,7 +46,7 @@ jobs:
       - name: Publicar a Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
             --notes "Receptor Linux (X11) do fork. Instale com installers/linux/install.sh." \
