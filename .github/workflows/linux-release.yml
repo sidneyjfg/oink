@@ -1,0 +1,50 @@
+name: Linux release
+# Gera o binário Linux (receptor X11) e publica numa Release deste repositório.
+# Rode manualmente (Actions > Linux release > Run workflow) informando a tag, por exemplo v0.3.7-linux1.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag da Release a criar (ex.: v0.3.7-linux1)
+        required: true
+        type: string
+permissions:
+  contents: write
+env:
+  CARGO_INCREMENTAL: '0'
+  # Sem símbolos de debug: binário de dezenas de MB em vez de centenas.
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+jobs:
+  linux:
+    if: github.repository != 'oinkvm/oink'
+    # glibc 2.35: roda em Debian 12 (2.36), Ubuntu 22.04+ e mais novos.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.0'
+      - uses: Swatinem/rust-cache@v2
+      - name: Dependências do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config cmake \
+            libssl-dev libasound2-dev libopus-dev libx11-dev libxtst-dev libxrandr-dev
+      - name: Compilar
+        run: cargo build --release --locked -p oink-agent
+      - name: Empacotar
+        run: |
+          mkdir out
+          cp target/release/oink-agent out/
+          tar -C out -czf oink-agent-linux-x86_64.tar.gz oink-agent
+          sha256sum oink-agent-linux-x86_64.tar.gz > oink-agent-linux-x86_64.tar.gz.sha256
+          ls -lh oink-agent-linux-x86_64.tar.gz
+      - name: Publicar a Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            --notes "Receptor Linux (X11) do fork. Instale com installers/linux/install.sh." \
+            oink-agent-linux-x86_64.tar.gz oink-agent-linux-x86_64.tar.gz.sha256
