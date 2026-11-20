@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag da Release a criar (ex.: v0.3.7-linux1)
+        description: 'Tag da Release a criar (por exemplo v0.3.7-linux1)'
         required: false
         type: string
 permissions:
