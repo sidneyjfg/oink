@@ -1,11 +1,12 @@
-//! Linux (X11) clipboard backend, text only.
+//! Linux (X11) clipboard backend: plain text and PNG images.
 //!
 //! One thread owns a connection and a hidden window: it serves our selection to other clients
 //! and watches ownership changes through XFixes. Reading another client's selection uses a
 //! short-lived connection, so it never competes with that thread for events.
 //!
-//! shortcut: plain text only (no images, HTML or files), and INCR (chunked) transfers are
-//! refused, so a very large copy is not synced; add `image/png` and INCR when needed.
+//! shortcut: only text and `image/png` (no HTML, RTF or files). Large selections are received
+//! in INCR chunks, but we never send INCR: an image bigger than the server's maximum request
+//! size is not served to other X clients. Add INCR sending if that ever matters.
 
 use std::io::{self, Cursor, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,6 +31,7 @@ use crate::{
 
 /// Same name the other platforms use for the portable UTF-8 text representation.
 const PORTABLE_TEXT: &str = "mime:text/plain;charset=utf-8";
+const PORTABLE_PNG: &str = "mime:image/png";
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) fn backend() -> Result<Box<dyn ClipboardBackend>, ClipboardError> {
@@ -43,15 +45,31 @@ struct Atoms {
     targets: Atom,
     text: Atom,
     incr: Atom,
+    png: Atom,
     /// Property used to receive a conversion.
     reply: Atom,
 }
 
+/// What the clipboard holds: text, or a PNG image (never both).
+#[derive(Clone, Debug, PartialEq)]
+enum Content {
+    Text(String),
+    Png(Vec<u8>),
+}
+
+/// What we serve while we own the selection.
+#[derive(Clone)]
+enum Served {
+    Text(Arc<str>),
+    Png(Arc<[u8]>),
+}
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
 #[derive(Default)]
 struct Shared {
     count: AtomicU64,
-    /// What we serve while we own the selection.
-    served: Mutex<Option<Arc<str>>>,
+    served: Mutex<Option<Served>>,
     handlers: Mutex<Vec<ChangeHandler>>,
     paused: AtomicBool,
 }
@@ -118,6 +136,7 @@ impl X11Clipboard {
             targets: intern(&conn, "TARGETS")?,
             text: intern(&conn, "TEXT")?,
             incr: intern(&conn, "INCR")?,
+            png: intern(&conn, "image/png")?,
             reply: intern(&conn, "OINK_CLIPBOARD")?,
         });
         conn.xfixes_query_version(5, 0)
@@ -152,13 +171,13 @@ impl X11Clipboard {
         })
     }
 
-    fn served(&self) -> Option<Arc<str>> {
+    fn served(&self) -> Option<Served> {
         self.shared.served.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Takes the selection and serves `text` until someone else copies.
-    fn publish(&self, text: &str) -> Result<u64, ClipboardError> {
-        *self.shared.served.lock().unwrap_or_else(|e| e.into_inner()) = Some(text.into());
+    /// Takes the selection and serves `content` until someone else copies.
+    fn publish(&self, content: Served) -> Result<u64, ClipboardError> {
+        *self.shared.served.lock().unwrap_or_else(|e| e.into_inner()) = Some(content);
         self.conn
             .set_selection_owner(self.window, self.atoms.clipboard, x11rb::CURRENT_TIME)
             .map_err(platform("SetSelectionOwner"))?;
@@ -167,8 +186,8 @@ impl X11Clipboard {
         Ok(self.shared.count.fetch_add(1, Ordering::AcqRel) + 1)
     }
 
-    /// The current clipboard text, or None when it holds none.
-    fn fetch_text(&self) -> Result<Option<String>, ClipboardError> {
+    /// The current clipboard content, or None when it holds neither text nor a PNG.
+    fn fetch(&self) -> Result<Option<Content>, ClipboardError> {
         let owner = self
             .conn
             .get_selection_owner(self.atoms.clipboard)
@@ -180,37 +199,103 @@ impl X11Clipboard {
             return Ok(None);
         }
         if owner == self.window {
-            return Ok(self.served().map(|text| text.to_string()));
+            return Ok(self.served().map(|served| match served {
+                Served::Text(text) => Content::Text(text.to_string()),
+                Served::Png(bytes) => Content::Png(bytes.to_vec()),
+            }));
         }
         read_selection(&self.atoms)
     }
 }
 
-/// Asks the selection owner for UTF-8 text on a private connection.
-fn read_selection(atoms: &Atoms) -> Result<Option<String>, ClipboardError> {
+/// Reads another client's clipboard on a private connection. Text wins over an image when the
+/// owner offers both (a spreadsheet copy), because that is what a text field would paste.
+fn read_selection(atoms: &Atoms) -> Result<Option<Content>, ClipboardError> {
     let (conn, root) = open()?;
     let window = hidden_window(&conn, root)?;
-    conn.convert_selection(window, atoms.clipboard, atoms.utf8, atoms.reply, x11rb::CURRENT_TIME)
+    // INCR chunks announce themselves as property changes on our window.
+    conn.change_window_attributes(
+        window,
+        &xproto::ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+    )
+    .map_err(platform("ChangeWindowAttributes"))?;
+    // An owner that does not answer TARGETS is still asked for text.
+    let targets: Vec<Atom> = match convert(&conn, window, atoms, atoms.targets) {
+        Ok(Some((_, bytes))) => bytes
+            .chunks_exact(4)
+            .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+            .collect(),
+        _ => vec![atoms.utf8],
+    };
+    if targets.contains(&atoms.utf8) {
+        return match convert(&conn, window, atoms, atoms.utf8)? {
+            Some((_, bytes)) => String::from_utf8(bytes)
+                .map(|text| Some(Content::Text(text)))
+                .map_err(|_| ClipboardError::ContentUnavailable(Unavailable::InvalidData)),
+            None => Ok(None),
+        };
+    }
+    if targets.contains(&atoms.png) {
+        return Ok(convert(&conn, window, atoms, atoms.png)?.map(|(_, bytes)| Content::Png(bytes)));
+    }
+    Ok(None)
+}
+
+/// Converts the selection to `target` and returns the property type and bytes, following INCR.
+fn convert(
+    conn: &RustConnection,
+    window: Window,
+    atoms: &Atoms,
+    target: Atom,
+) -> Result<Option<(Atom, Vec<u8>)>, ClipboardError> {
+    conn.convert_selection(window, atoms.clipboard, target, atoms.reply, x11rb::CURRENT_TIME)
         .map_err(platform("ConvertSelection"))?;
     conn.flush().map_err(platform("flush"))?;
-    let deadline = Instant::now() + READ_TIMEOUT;
+    let mut deadline = Instant::now() + READ_TIMEOUT;
     loop {
         match conn.poll_for_event().map_err(platform("poll"))? {
             Some(Event::SelectionNotify(event)) => {
                 if event.property == x11rb::NONE {
                     return Ok(None);
                 }
-                let reply = conn
-                    .get_property(true, window, atoms.reply, AtomEnum::ANY, 0, 16 * 1024 * 1024)
-                    .map_err(platform("GetProperty"))?
-                    .reply()
-                    .map_err(platform("GetProperty"))?;
-                if reply.type_ == atoms.incr || reply.bytes_after > 0 {
+                break;
+            }
+            Some(_) => {}
+            None if Instant::now() >= deadline => return Err(ClipboardError::Busy),
+            None => std::thread::sleep(Duration::from_millis(4)),
+        }
+    }
+    let take = || -> Result<_, ClipboardError> {
+        conn.get_property(true, window, atoms.reply, AtomEnum::ANY, 0, 16 * 1024 * 1024)
+            .map_err(platform("GetProperty"))?
+            .reply()
+            .map_err(platform("GetProperty"))
+    };
+    let first = take()?;
+    if first.type_ != atoms.incr {
+        if first.bytes_after > 0 {
+            return Err(ClipboardError::ContentUnavailable(Unavailable::LimitExceeded));
+        }
+        return Ok(Some((first.type_, first.value)));
+    }
+    // Deleting the property above told the owner to start sending chunks; an empty one ends it.
+    let (mut kind, mut data) = (target, Vec::new());
+    deadline = Instant::now() + READ_TIMEOUT;
+    loop {
+        match conn.poll_for_event().map_err(platform("poll"))? {
+            Some(Event::PropertyNotify(event))
+                if event.window == window && event.atom == atoms.reply && event.state == xproto::Property::NEW_VALUE =>
+            {
+                let chunk = take()?;
+                if chunk.value.is_empty() {
+                    return Ok(Some((kind, data)));
+                }
+                if data.len() + chunk.value.len() > crate::formats::ITEM_MAX {
                     return Err(ClipboardError::ContentUnavailable(Unavailable::LimitExceeded));
                 }
-                return String::from_utf8(reply.value)
-                    .map(Some)
-                    .map_err(|_| ClipboardError::ContentUnavailable(Unavailable::InvalidData));
+                kind = chunk.type_;
+                data.extend_from_slice(&chunk.value);
+                deadline = Instant::now() + READ_TIMEOUT;
             }
             Some(_) => {}
             None if Instant::now() >= deadline => return Err(ClipboardError::Busy),
@@ -240,8 +325,8 @@ fn serve(conn: &RustConnection, window: Window, atoms: &Atoms, shared: &Shared) 
                 *shared.served.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             Event::SelectionRequest(request) => {
-                let text = shared.served.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                let _ = answer(conn, atoms, &request, text.as_deref());
+                let served = shared.served.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let _ = answer(conn, atoms, &request, served.as_ref());
             }
             _ => {}
         }
@@ -252,7 +337,7 @@ fn answer(
     conn: &RustConnection,
     atoms: &Atoms,
     request: &xproto::SelectionRequestEvent,
-    text: Option<&str>,
+    content: Option<&Served>,
 ) -> Result<(), x11rb::errors::ReplyOrIdError> {
     // Old clients leave the property unset: the target doubles as the property name.
     let property = if request.property == x11rb::NONE {
@@ -261,27 +346,34 @@ fn answer(
         request.property
     };
     let max = conn.maximum_request_bytes().saturating_sub(64);
-    let served = match (request.selection == atoms.clipboard, text) {
-        (true, Some(_)) if request.target == atoms.targets => {
-            let targets = [
-                atoms.targets,
-                atoms.utf8,
-                atoms.mime_utf8,
-                atoms.text,
-                AtomEnum::STRING.into(),
-            ];
+    let served = match (request.selection == atoms.clipboard, content) {
+        (true, Some(content)) if request.target == atoms.targets => {
+            let targets = match content {
+                Served::Text(_) => vec![
+                    atoms.targets,
+                    atoms.utf8,
+                    atoms.mime_utf8,
+                    atoms.text,
+                    AtomEnum::STRING.into(),
+                ],
+                Served::Png(_) => vec![atoms.targets, atoms.png],
+            };
             conn.change_property32(PropMode::REPLACE, request.requestor, property, AtomEnum::ATOM, &targets)?;
             true
         }
-        (true, Some(text))
+        (true, Some(Served::Text(text)))
             if text.len() <= max
                 && (request.target == atoms.utf8 || request.target == atoms.mime_utf8 || request.target == atoms.text) =>
         {
             conn.change_property8(PropMode::REPLACE, request.requestor, property, atoms.utf8, text.as_bytes())?;
             true
         }
-        (true, Some(text)) if text.len() <= max && request.target == u32::from(AtomEnum::STRING) => {
+        (true, Some(Served::Text(text))) if text.len() <= max && request.target == u32::from(AtomEnum::STRING) => {
             conn.change_property8(PropMode::REPLACE, request.requestor, property, AtomEnum::STRING, &latin1(text))?;
+            true
+        }
+        (true, Some(Served::Png(png))) if png.len() <= max && request.target == atoms.png => {
+            conn.change_property8(PropMode::REPLACE, request.requestor, property, atoms.png, png)?;
             true
         }
         _ => false,
@@ -303,6 +395,13 @@ fn answer(
 /// Characters outside Latin-1 cannot be represented in the legacy STRING target.
 fn latin1(text: &str) -> Vec<u8> {
     text.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect()
+}
+
+fn is_empty(content: &Content) -> bool {
+    match content {
+        Content::Text(text) => text.is_empty(),
+        Content::Png(bytes) => bytes.is_empty(),
+    }
 }
 
 fn offer_id(count: u64) -> OfferId {
@@ -333,7 +432,7 @@ fn decode_text(rep: &Representation, bytes: Vec<u8>) -> io::Result<String> {
 
 struct Snapshot {
     inventory: Inventory,
-    text: Vec<u8>,
+    data: Vec<u8>,
     shared: Arc<Shared>,
     count: u64,
 }
@@ -349,6 +448,9 @@ fn current(shared: &Shared, count: u64) -> io::Result<()> {
 struct Portable;
 impl Translator for Portable {
     fn standard(&self, rep: &Representation, bytes: &[u8]) -> io::Result<Vec<ClipData>> {
+        if rep.standard == Some(StandardFormat::Png) {
+            return Ok(vec![ClipData::Png(bytes.to_vec())]);
+        }
         Ok(vec![ClipData::Text(decode_text(rep, bytes.to_vec())?)])
     }
 }
@@ -359,7 +461,7 @@ impl Provider for Snapshot {
     }
     fn open(&self, _: RepresentationId) -> io::Result<crate::FileReader> {
         current(&self.shared, self.count)?;
-        Ok(Box::new(Cursor::new(self.text.clone())))
+        Ok(Box::new(Cursor::new(self.data.clone())))
     }
     fn reader_guard(&self, _: RepresentationId) -> io::Result<content::ReaderGuard> {
         let (shared, count) = (self.shared.clone(), self.count);
@@ -373,24 +475,27 @@ impl Provider for Snapshot {
     }
 }
 
-/// Inventory with one portable text item, or none for an empty clipboard.
-fn text_inventory(count: u64, text: Option<&str>) -> Inventory {
-    let items = text
-        .map(|text| {
-            let id = RepresentationId(1);
+/// Inventory with one portable item (text or PNG), or none for an empty clipboard.
+fn inventory_for(count: u64, content: Option<&Content>) -> Inventory {
+    let items = content
+        .map(|content| {
+            let (name, standard, size) = match content {
+                Content::Text(text) => (PORTABLE_TEXT, StandardFormat::Text, text.len()),
+                Content::Png(bytes) => (PORTABLE_PNG, StandardFormat::Png, bytes.len()),
+            };
             ContentItem {
                 virtual_files: false,
                 id: ItemId(1),
                 file: None,
                 representations: vec![Representation {
-                    id,
-                    format: NativeFormat::Unknown(PORTABLE_TEXT.into()),
+                    id: RepresentationId(1),
+                    format: NativeFormat::Unknown(name.into()),
                     medium: Medium::Bytes,
                     aspect: 1,
                     index: -1,
-                    standard: Some(StandardFormat::Text),
+                    standard: Some(standard),
                     data: RepresentationData::Reader {
-                        size: ContentSize::Known(text.len() as u64),
+                        size: ContentSize::Known(size as u64),
                     },
                 }],
             }
@@ -413,9 +518,12 @@ impl ClipboardBackend for X11Clipboard {
     fn read(&self) -> Result<ClipSnapshot, ClipboardError> {
         let change_count = self.change_count();
         let items = self
-            .fetch_text()?
-            .filter(|text| !text.is_empty())
-            .map(ClipData::Text)
+            .fetch()?
+            .filter(|content| !is_empty(content))
+            .map(|content| match content {
+                Content::Text(text) => ClipData::Text(text),
+                Content::Png(bytes) => ClipData::Png(bytes),
+            })
             .into_iter()
             .collect();
         Ok(ClipSnapshot {
@@ -427,8 +535,8 @@ impl ClipboardBackend for X11Clipboard {
 
     fn capture(&self, _: &std::path::Path) -> Result<CapturedClipboard, ClipboardError> {
         let count = self.change_count();
-        let text = self.fetch_text()?.filter(|text| !text.is_empty());
-        let inventory = text_inventory(count, text.as_deref());
+        let content = self.fetch()?.filter(|content| !is_empty(content));
+        let inventory = inventory_for(count, content.as_ref());
         inventory.validate().map_err(ClipboardError::ContentUnavailable)?;
         let snapshot = ClipSnapshot {
             items: content::items(&inventory),
@@ -439,7 +547,11 @@ impl ClipboardBackend for X11Clipboard {
             snapshot,
             content: Some(Arc::new(Snapshot {
                 inventory,
-                text: text.unwrap_or_default().into_bytes(),
+                data: match content {
+                    Some(Content::Text(text)) => text.into_bytes(),
+                    Some(Content::Png(bytes)) => bytes,
+                    None => Vec::new(),
+                },
                 shared: self.shared.clone(),
                 count,
             })),
@@ -447,35 +559,48 @@ impl ClipboardBackend for X11Clipboard {
     }
 
     fn write_native_guarded(&self, spec: NativeSpec, guard: content::ReaderGuard) -> Result<u64, ClipboardError> {
-        // Only text can be published here; the agent retries without files on this error.
+        // Only text and PNG can be published here; the agent retries without files on this error.
         if !spec.files.is_empty() {
             return Err(ClipboardError::FileProviderUnavailable);
         }
-        let rep = spec
-            .inventory
-            .items
-            .iter()
-            .filter(|item| item.file.is_none())
-            .flat_map(|item| &item.representations)
-            .find(|rep| rep.standard == Some(StandardFormat::Text) && rep.data.size().is_some())
-            .ok_or(ClipboardError::Unsupported)?;
+        let find = |standard| {
+            spec.inventory
+                .items
+                .iter()
+                .filter(|item| item.file.is_none())
+                .flat_map(|item| &item.representations)
+                .find(|rep| rep.standard == Some(standard) && rep.data.size().is_some())
+        };
+        let (rep, is_png) = match find(StandardFormat::Text) {
+            Some(rep) => (rep, false),
+            None => (find(StandardFormat::Png).ok_or(ClipboardError::Unsupported)?, true),
+        };
         let mut bytes = Vec::new();
         spec.contents
             .open(rep.id)
             .and_then(|reader| reader.take(crate::formats::ITEM_MAX as u64).read_to_end(&mut bytes))
             .map_err(|e| ClipboardError::ContentUnavailable(content::reason(&e)))?;
-        // Peers always convert to the portable UTF-8 format for this platform.
-        let text = String::from_utf8(bytes).map_err(|_| ClipboardError::ContentUnavailable(Unavailable::InvalidData))?;
+        // Peers always convert to the portable formats (UTF-8 text, PNG) for this platform.
+        let invalid = || ClipboardError::ContentUnavailable(Unavailable::InvalidData);
+        let served = if is_png {
+            if !bytes.starts_with(PNG_SIGNATURE) {
+                return Err(invalid());
+            }
+            Served::Png(bytes.into())
+        } else {
+            Served::Text(String::from_utf8(bytes).map_err(|_| invalid())?.into())
+        };
         guard().map_err(|_| ClipboardError::Busy)?;
-        self.publish(&text)
+        self.publish(served)
     }
 
     fn write(&self, items: &[ClipData], _: Sensitivity) -> Result<u64, ClipboardError> {
         match items.iter().find_map(|item| match item {
-            ClipData::Text(text) => Some(text),
+            ClipData::Text(text) => Some(Served::Text(text.as_str().into())),
+            ClipData::Png(bytes) => Some(Served::Png(bytes.as_slice().into())),
             _ => None,
         }) {
-            Some(text) => self.publish(text),
+            Some(served) => self.publish(served),
             None => Err(ClipboardError::Unsupported),
         }
     }
@@ -518,10 +643,13 @@ mod tests {
 
     #[test]
     fn inventory_for_text_is_valid_and_empty_clipboard_has_no_items() {
-        let with = text_inventory(3, Some("hi"));
+        let with = inventory_for(3, Some(&Content::Text("hi".into())));
         with.validate().unwrap();
         assert_eq!(with.items.len(), 1);
-        let without = text_inventory(4, None);
+        let image = inventory_for(5, Some(&Content::Png(PNG_SIGNATURE.to_vec())));
+        image.validate().unwrap();
+        assert_eq!(image.items[0].representations[0].standard, Some(StandardFormat::Png));
+        let without = inventory_for(4, None);
         without.validate().unwrap();
         assert!(without.items.is_empty());
     }
@@ -558,5 +686,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(a.read().unwrap().items, vec![ClipData::Text("segunda".into())]);
+        // An image goes through the same path.
+        let mut png = PNG_SIGNATURE.to_vec();
+        png.extend((0..300_000u32).map(|n| (n % 251) as u8));
+        a.write(&[ClipData::Png(png.clone())], Sensitivity::Normal).unwrap();
+        assert_eq!(b.read().unwrap().items, vec![ClipData::Png(png)]);
     }
 }

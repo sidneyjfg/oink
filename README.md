@@ -20,7 +20,7 @@ Este fork faz o **Linux** participar, **como máquina controlada**:
 |---|---|---|
 | Teclado e mouse controlando outro computador | sim | **não** (só recebe) |
 | Ser controlado pelo teclado e mouse de outro | sim | **sim** |
-| Área de transferência sincronizada | texto, imagem, arquivos | **só texto simples**, nos dois sentidos |
+| Área de transferência sincronizada | texto, imagem, arquivos | **texto simples e imagens PNG**, nos dois sentidos |
 | Arrastar e soltar, áudio compartilhado | sim | não |
 | Interface gráfica | sim | não (linha de comando) |
 | Sessão gráfica | qualquer | **X11** (Wayland não funciona) |
@@ -162,7 +162,7 @@ entre versões.)
 controlador para pausar o compartilhamento.
 
 **Área de transferência:** o texto copiado em um computador pode ser colado no outro, nos dois
-sentidos. Com Linux no meio, só texto simples (veja [Limitações](#limitações-conhecidas)).
+sentidos. Com Linux no meio, só texto simples e imagens PNG (veja [Limitações](#limitações-conhecidas)).
 
 ## Windows controla macOS
 
@@ -219,8 +219,8 @@ XInput2 e o modo "grab" no `oink-agent`, o que não foi feito. Enquanto isso, o 
 
 ## Limitações conhecidas
 
-- Área de transferência: somente texto simples (sem imagem, HTML ou arquivos; textos enormes
-  transferidos em partes, protocolo INCR, são recusados).
+- Área de transferência: texto simples e imagens PNG (sem HTML, RTF ou arquivos). Imagens muito grandes
+  podem não ser enviadas do Linux para o PC.
 - Sem Wayland, sem arrastar e soltar, sem áudio compartilhado, sem interface gráfica no Linux.
 - O notebook nunca controla o PC: não há captura de entrada no Linux.
 - Testado em Debian 12 com GNOME/Xorg e PC com Windows 11. Outras combinações podem funcionar, mas
