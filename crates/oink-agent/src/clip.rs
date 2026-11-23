@@ -781,8 +781,14 @@ impl Task {
         } else if cfg!(windows) {
             oink_foundation::clipboard::ClipPlatform::Windows
         } else {
-            // Linux has no native reconstruction contract: peers convert to portable formats.
-            oink_foundation::clipboard::ClipPlatform::Unknown
+            // Linux has no native reconstruction contract. Claim to be the desktop platform the offer
+            // did NOT come from, so both sides take the portable-format path and an unmodified
+            // peer (which rejects an unknown target) still serves the read.
+            use oink_foundation::clipboard::ClipPlatform as P;
+            match oink_clipboard::wire::local_inventory(&raw).map(|inventory| inventory.platform) {
+                Ok(P::Windows) => P::Mac,
+                _ => P::Windows,
+            }
         };
         let existing = self
             .shared

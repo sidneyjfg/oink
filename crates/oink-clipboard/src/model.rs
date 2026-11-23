@@ -121,6 +121,7 @@ impl Inventory {
             let skip = item.file.is_some_and(|id| skipped.contains(&id));
             item.representations.iter().filter(move |rep| {
                 !skip
+                    && target != ClipPlatform::Unknown
                     && !matches!(rep.data, RepresentationData::Unavailable(_))
                     && ((target == self.platform && rep.format.platform() != ClipPlatform::Unknown)
                         || matches!(rep.data, RepresentationData::File(_))

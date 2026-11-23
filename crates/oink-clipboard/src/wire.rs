@@ -1175,8 +1175,7 @@ mod tests {
         assert!(matches!(&supported.items[0].representations[0].format,
             domain::NativeFormat::Unknown(name) if name == "future-format:opaque"));
         assert_eq!(supported.wanted(ClipPlatform::Mac).count(), 1);
-        // A target without a native contract (Linux) still receives portable formats.
-        assert_eq!(supported.wanted(ClipPlatform::Unknown).count(), 1);
+        assert_eq!(supported.wanted(ClipPlatform::Unknown).count(), 0);
         supported.validate().unwrap();
     }
     #[test]
