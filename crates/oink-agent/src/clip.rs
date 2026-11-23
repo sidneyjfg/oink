@@ -778,8 +778,11 @@ impl Task {
             .map_err(|_| E::Unsupported)?;
         let target = if cfg!(target_os = "macos") {
             oink_foundation::clipboard::ClipPlatform::Mac
-        } else {
+        } else if cfg!(windows) {
             oink_foundation::clipboard::ClipPlatform::Windows
+        } else {
+            // Linux has no native reconstruction contract: peers convert to portable formats.
+            oink_foundation::clipboard::ClipPlatform::Unknown
         };
         let existing = self
             .shared

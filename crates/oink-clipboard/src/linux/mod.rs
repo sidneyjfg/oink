@@ -464,7 +464,8 @@ impl ClipboardBackend for X11Clipboard {
             .open(rep.id)
             .and_then(|reader| reader.take(crate::formats::ITEM_MAX as u64).read_to_end(&mut bytes))
             .map_err(|e| ClipboardError::ContentUnavailable(content::reason(&e)))?;
-        let text = decode_text(rep, bytes).map_err(|e| ClipboardError::ContentUnavailable(content::reason(&e)))?;
+        // Peers always convert to the portable UTF-8 format for this platform.
+        let text = String::from_utf8(bytes).map_err(|_| ClipboardError::ContentUnavailable(Unavailable::InvalidData))?;
         guard().map_err(|_| ClipboardError::Busy)?;
         self.publish(&text)
     }
